@@ -134,6 +134,7 @@ int o_lock=0;
 int o_lockall=0;
 int o_daemon=0;
 int o_followsymlinks=0;
+int o_kiBps = 0;
 int o_singlefilesystem=0;
 int o_ignorehardlinkeduplictes=0;
 size_t o_max_file_size=SIZE_MAX;
@@ -182,6 +183,7 @@ void usage() {
   printf("  -0 in batch mode (-b) separate paths with NUL byte instead of newline\n");
   printf("  -w wait until all pages are locked (only useful together with -d)\n");
   printf("  -P <pidfile> write a pidfile (only useful together with -l or -L)\n");
+  printf("  -l <kiBps_rate> (try to touch out-of-core memory slower given rate)\n");
   printf("  -v verbose\n");
   printf("  -q quiet\n");
   exit(1);
@@ -609,6 +611,15 @@ void vmtouch_file(char *path) {
 #endif
   } else {
     double last_chart_print_time=0.0, temp_time;
+    double last_rate_time;
+    double time_128kiB;
+    double sleep_time_128kiB;
+    double target_dt = 0;
+    if ( o_kiBps )
+    {
+        target_dt = (double)(128*1024)/(double)(o_kiBps);
+    }
+    int pages_touched = 0;
     char *mincore_array = malloc(pages_in_range);
     if (mincore_array == NULL) fatal("Failed to allocate memory for mincore array (%s)", strerror(errno));
 
@@ -632,9 +643,41 @@ void vmtouch_file(char *path) {
     }
 
     if (o_touch) {
+
+      last_rate_time = gettimeofday_as_double();
+
       for (i=0; i<pages_in_range; i++) {
-        junk_counter += ((char*)mem)[i*pagesize];
-        mincore_array[i] = 1;
+        if ( is_mincore_page_resident(mincore_array[i]) )
+        {
+            // page is already resident, we do not need to reference it and
+            // nanosleep() for pacing ourselves
+        } 
+        else
+        {
+          junk_counter += ((char*)mem)[i*pagesize];
+          mincore_array[i] = 1;
+          if ( o_kiBps )
+          {
+            pages_touched++;
+            if ( pages_touched * pagesize >= 128*1024 )
+            {
+              time_128kiB = gettimeofday_as_double() - last_rate_time;
+              sleep_time_128kiB = target_dt - time_128kiB;
+              if ( sleep_time_128kiB > 0 )
+              {
+                  nanosleep(  (unsigned integer)(1000000.0*sleep_time_128kiB) );
+                  if ( o_verbose )
+                  {
+                      fprintf( stderr, "[%s:%s-DBG] usleep(%u)\n", __FILE__,__LINE__, (unsigned integer)(1000000.0*sleep_time_128kiB) );
+                  }
+              }
+              pages_touched = 0;
+              last_rate_time = gettimeofday_as_double();
+            }
+          }
+
+          // nanosleep();
+        }
 
         if (o_verbose) {
           temp_time = gettimeofday_as_double();
@@ -957,7 +1000,7 @@ int main(int argc, char **argv) {
 
   pagesize = sysconf(_SC_PAGESIZE);
 
-  while((ch = getopt(argc, argv, "tevqlLdfFh0i:I:p:b:m:P:w")) != -1) {
+  while((ch = getopt(argc, argv, "tevqlLdfFh0i:I:p:b:m:P:l:w")) != -1) {
     switch(ch) {
       case '?': usage(); break;
       case 't': o_touch = 1; break;
@@ -975,6 +1018,7 @@ int main(int argc, char **argv) {
       case 'p': parse_range(optarg); break;
       case 'i': parse_ignore_item(optarg); break;
       case 'I': parse_filename_filter_item(optarg); break;
+      case 'l': o_kiBps = atoi(optarg); break;
       case 'm': {
         int64_t val = parse_size(optarg);
         o_max_file_size = (size_t) val;
