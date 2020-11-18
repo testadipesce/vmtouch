@@ -183,7 +183,7 @@ void usage() {
   printf("  -0 in batch mode (-b) separate paths with NUL byte instead of newline\n");
   printf("  -w wait until all pages are locked (only useful together with -d)\n");
   printf("  -P <pidfile> write a pidfile (only useful together with -l or -L)\n");
-  printf("  -l <kiBps_rate> (try to touch out-of-core memory slower given rate)\n");
+  printf("  -l <kiBps_rate> (try to touch out-of-core memory no faster than given rate, debug on -vv)\n");
   printf("  -v verbose\n");
   printf("  -q quiet\n");
   exit(1);
@@ -617,7 +617,7 @@ void vmtouch_file(char *path) {
     double target_dt = 0;
     if ( o_kiBps )
     {
-        target_dt = (double)(128*1024)/(double)(o_kiBps);
+        target_dt = ((double)(128*1024))/(1024*(double)(o_kiBps));
     }
     int pages_touched = 0;
     char *mincore_array = malloc(pages_in_range);
@@ -665,18 +665,18 @@ void vmtouch_file(char *path) {
               sleep_time_128kiB = target_dt - time_128kiB;
               if ( sleep_time_128kiB > 0 )
               {
-                  nanosleep(  (unsigned integer)(1000000.0*sleep_time_128kiB) );
-                  if ( o_verbose )
+                  if ( o_verbose>1 )
                   {
-                      fprintf( stderr, "[%s:%s-DBG] usleep(%u)\n", __FILE__,__LINE__, (unsigned integer)(1000000.0*sleep_time_128kiB) );
+                      fprintf( stderr, "[%s:%d-DBG] usleep(%u)\n", __FILE__,__LINE__, (unsigned int)(1000000.0*sleep_time_128kiB) );
+                      fflush( stderr );
                   }
+                  usleep(  (unsigned int)(1000000.0*sleep_time_128kiB) );
               }
               pages_touched = 0;
               last_rate_time = gettimeofday_as_double();
             }
           }
 
-          // nanosleep();
         }
 
         if (o_verbose) {
@@ -1000,7 +1000,7 @@ int main(int argc, char **argv) {
 
   pagesize = sysconf(_SC_PAGESIZE);
 
-  while((ch = getopt(argc, argv, "tevqlLdfFh0i:I:p:b:m:P:l:w")) != -1) {
+  while((ch = getopt(argc, argv, "tevqlLdfFh0i:I:p:b:m:P:r:w")) != -1) {
     switch(ch) {
       case '?': usage(); break;
       case 't': o_touch = 1; break;
@@ -1018,7 +1018,7 @@ int main(int argc, char **argv) {
       case 'p': parse_range(optarg); break;
       case 'i': parse_ignore_item(optarg); break;
       case 'I': parse_filename_filter_item(optarg); break;
-      case 'l': o_kiBps = atoi(optarg); break;
+      case 'r': o_kiBps = atoi(optarg); break;
       case 'm': {
         int64_t val = parse_size(optarg);
         o_max_file_size = (size_t) val;
