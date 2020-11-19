@@ -129,7 +129,9 @@ int orig_device_inited = 0;
 int o_touch=0;
 int o_evict=0;
 int o_quiet=0;
+int o_noSizeWarnings=0;
 int o_verbose=0;
+int64_t o_residencyDigestThreshold= -1;
 int o_lock=0;
 int o_lockall=0;
 int o_daemon=0;
@@ -176,20 +178,23 @@ void usage() {
   printf("  -d daemon mode\n");
   printf("  -m <size> max file size to touch\n");
   printf("  -M <size> min file size to touch, e.g. 1k or 16M or 1g....\n");
-  printf("  -p <range> use the specified portion instead of the entire file\n");
+  printf("  -p <range> use the specified portion instead of the entire file, e.g., 400k-2M or -2M or 1G-\n");
   printf("  -f follow symbolic links\n");
   printf("  -F don't crawl different filesystems\n");
   printf("  -h also count hardlinked copies\n");
-  printf("  -i <pattern> ignores files and directories that match this pattern\n");
-  printf("  -I <pattern> only process files that match this pattern\n");
+  printf("  -i <pattern> ignores files and directories that match this pattern (uses fnmatch())\n");
+  printf("  -I <pattern> only process files that match this pattern (uses fnmatch())\n");
   printf("  -b <list file> get files or directories from the list file\n");
   printf("  -0 in batch mode (-b) separate paths with NUL byte instead of newline\n");
   printf("  -w wait until all pages are locked (only useful together with -d)\n");
   printf("  -P <pidfile> write a pidfile (only useful together with -l or -L)\n");
   printf("  -r <bytes_per_second_limit> (try to touch out-of-core memory no faster than this, debug on -vv)\n");
   printf("  -R <pagesPerRateChunk> touch this many pages before sleeping if using rate limiting (default: %d)\n", o_pagesPerRateChunk );
+  printf("  -V <size> outputs 'INCORE:<path>:resident_size:total_size:human_total_size:pct_res' for all files with resident size >= size (if -e: before eviction; if -t: before touch) [BUGS! needs cleaning for when -p <range> also given]\n");
   printf("  -v verbose\n");
+
   printf("  -q quiet\n");
+  printf("  -Q no size exclusion warnings output on size filters\n" );
   exit(1);
 }
 
@@ -574,12 +579,18 @@ void vmtouch_file(char *path) {
   }
 
   if (len_of_file > o_max_file_size) {
-    warning("file %s too large (%lu), skipping", path, (ulong)len_of_file );
+    if ( ! o_noSizeWarnings )
+    {
+      warning("file %s too large (%lu), skipping", path, (ulong)len_of_file );
+    }
     goto bail;
   }
 
   if (len_of_file < o_min_file_size) {
-    warning("file %s too small (%lu), skipping", path, (ulong)len_of_file );
+    if ( ! o_noSizeWarnings )
+    {
+      warning("file %s too small (%lu), skipping", path, (ulong)len_of_file );
+    }
     goto bail;
   }
 
@@ -609,6 +620,28 @@ void vmtouch_file(char *path) {
   if (o_evict) {
     if (o_verbose) printf("Evicting %s\n", path);
 
+    if ( o_residencyDigestThreshold != -1 )
+    {
+        char *mincore_array = malloc(pages_in_range);
+        int64_t range_pages_in_core = 0;
+        if (mincore_array == NULL) fatal("Failed to allocate memory for mincore array (%s)", strerror(errno));
+
+        // 3rd arg to mincore is char* on BSD and unsigned char* on linux
+        if (mincore(mem, len_of_range, (void*)mincore_array)) fatal("mincore %s (%s)", path, strerror(errno));
+        for (i=0; i<pages_in_range; i++) 
+        {
+          if (is_mincore_page_resident(mincore_array[i])) 
+          {
+            range_pages_in_core++;
+          }
+        }
+      if ( range_pages_in_core*pagesize >= o_residencyDigestThreshold )
+      {
+         printf( "INCORE:%s:%lu:%lu:%s:%.3g%%\n", path, range_pages_in_core*pagesize, bytes2pages(len_of_file)*pagesize, pretty_print_size(len_of_file), 100.0*range_pages_in_core/bytes2pages(len_of_file) );
+      }
+    }
+    
+
 #if defined(__linux__) || defined(__hpux)
     if (posix_fadvise(fd, offset, len_of_range, POSIX_FADV_DONTNEED))
       warning("unable to posix_fadvise file %s (%s)", path, strerror(errno));
@@ -629,6 +662,7 @@ void vmtouch_file(char *path) {
         target_dt = ((double)(pagesize*o_pagesPerRateChunk))/((double)o_Bps);
     }
     int pages_touched = 0;
+    int64_t range_pages_in_core = 0;
     char *mincore_array = malloc(pages_in_range);
     if (mincore_array == NULL) fatal("Failed to allocate memory for mincore array (%s)", strerror(errno));
 
@@ -636,8 +670,13 @@ void vmtouch_file(char *path) {
     if (mincore(mem, len_of_range, (void*)mincore_array)) fatal("mincore %s (%s)", path, strerror(errno));
     for (i=0; i<pages_in_range; i++) {
       if (is_mincore_page_resident(mincore_array[i])) {
-        total_pages_in_core++;
+        range_pages_in_core++;
       }
+    }
+    total_pages_in_core += range_pages_in_core;
+    if ( o_residencyDigestThreshold != -1 && range_pages_in_core*pagesize >= o_residencyDigestThreshold )
+    {
+         printf( "INCORE:%s:%lu:%lu:%s:%.3g%%\n", path, range_pages_in_core*pagesize, bytes2pages(len_of_file)*pagesize, pretty_print_size(len_of_file), 100.0*range_pages_in_core/bytes2pages(len_of_file) );
     }
 
     if (o_verbose) {
@@ -1009,12 +1048,13 @@ int main(int argc, char **argv) {
 
   pagesize = sysconf(_SC_PAGESIZE);
 
-  while((ch = getopt(argc, argv, "tevqlLdfFh0i:I:p:b:M:m:P:R:r:w")) != -1) {
+  while((ch = getopt(argc, argv, "tevqQlLdfFh0i:I:p:b:M:m:P:R:r:wV:")) != -1) {
     switch(ch) {
       case '?': usage(); break;
       case 't': o_touch = 1; break;
       case 'e': o_evict = 1; break;
       case 'q': o_quiet = 1; break;
+      case 'Q': o_noSizeWarnings = 1; break;
       case 'v': o_verbose++; break;
       case 'l': o_lock = 1;
                 o_touch = 1; break;
@@ -1031,6 +1071,12 @@ int main(int argc, char **argv) {
       {
         int64_t val = parse_size(optarg);
         o_Bps = (int)val;
+        break;
+      }
+      case 'V': 
+      {
+        int64_t val = parse_size(optarg);
+        o_residencyDigestThreshold = (int64_t)val;
         break;
       }
       case 'R': 
