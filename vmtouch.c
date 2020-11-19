@@ -134,10 +134,12 @@ int o_lock=0;
 int o_lockall=0;
 int o_daemon=0;
 int o_followsymlinks=0;
-int o_kiBps = 0;
+int o_Bps = 0;
+int o_pagesPerRateChunk = 32;
 int o_singlefilesystem=0;
 int o_ignorehardlinkeduplictes=0;
 size_t o_max_file_size=SIZE_MAX;
+size_t o_min_file_size=0;
 int o_wait=0;
 static char *o_batch = NULL;
 static char *o_pidfile = NULL;
@@ -173,6 +175,7 @@ void usage() {
   printf("  -L lock pages in physical memory with mlockall(2)\n");
   printf("  -d daemon mode\n");
   printf("  -m <size> max file size to touch\n");
+  printf("  -M <size> min file size to touch, e.g. 1k or 16M or 1g....\n");
   printf("  -p <range> use the specified portion instead of the entire file\n");
   printf("  -f follow symbolic links\n");
   printf("  -F don't crawl different filesystems\n");
@@ -183,7 +186,8 @@ void usage() {
   printf("  -0 in batch mode (-b) separate paths with NUL byte instead of newline\n");
   printf("  -w wait until all pages are locked (only useful together with -d)\n");
   printf("  -P <pidfile> write a pidfile (only useful together with -l or -L)\n");
-  printf("  -l <kiBps_rate> (try to touch out-of-core memory no faster than given rate, debug on -vv)\n");
+  printf("  -r <bytes_per_second_limit> (try to touch out-of-core memory no faster than this, debug on -vv)\n");
+  printf("  -R <pagesPerRateChunk> touch this many pages before sleeping if using rate limiting (default: %d)\n", o_pagesPerRateChunk );
   printf("  -v verbose\n");
   printf("  -q quiet\n");
   exit(1);
@@ -570,7 +574,12 @@ void vmtouch_file(char *path) {
   }
 
   if (len_of_file > o_max_file_size) {
-    warning("file %s too large, skipping", path);
+    warning("file %s too large (%lu), skipping", path, (ulong)len_of_file );
+    goto bail;
+  }
+
+  if (len_of_file < o_min_file_size) {
+    warning("file %s too small (%lu), skipping", path, (ulong)len_of_file );
     goto bail;
   }
 
@@ -612,12 +621,12 @@ void vmtouch_file(char *path) {
   } else {
     double last_chart_print_time=0.0, temp_time;
     double last_rate_time;
-    double time_128kiB;
-    double sleep_time_128kiB;
+    double time_chunk;
+    double sleep_time_chunk;
     double target_dt = 0;
-    if ( o_kiBps )
+    if ( o_Bps )
     {
-        target_dt = ((double)(128*1024))/(1024*(double)(o_kiBps));
+        target_dt = ((double)(pagesize*o_pagesPerRateChunk))/((double)o_Bps);
     }
     int pages_touched = 0;
     char *mincore_array = malloc(pages_in_range);
@@ -656,21 +665,21 @@ void vmtouch_file(char *path) {
         {
           junk_counter += ((char*)mem)[i*pagesize];
           mincore_array[i] = 1;
-          if ( o_kiBps )
+          if ( o_Bps )
           {
             pages_touched++;
-            if ( pages_touched * pagesize >= 128*1024 )
+            if ( pages_touched >= o_pagesPerRateChunk )
             {
-              time_128kiB = gettimeofday_as_double() - last_rate_time;
-              sleep_time_128kiB = target_dt - time_128kiB;
-              if ( sleep_time_128kiB > 0 )
+              time_chunk = gettimeofday_as_double() - last_rate_time;
+              sleep_time_chunk = target_dt - time_chunk;
+              if ( sleep_time_chunk > 0 )
               {
                   if ( o_verbose>1 )
                   {
-                      fprintf( stderr, "[%s:%d-DBG] usleep(%u)\n", __FILE__,__LINE__, (unsigned int)(1000000.0*sleep_time_128kiB) );
+                      fprintf( stderr, "[%s:%d-DBG] usleep(%u)\n", __FILE__,__LINE__, (unsigned int)(1000000.0*sleep_time_chunk) );
                       fflush( stderr );
                   }
-                  usleep(  (unsigned int)(1000000.0*sleep_time_128kiB) );
+                  usleep(  (unsigned int)(1000000.0*sleep_time_chunk) );
               }
               pages_touched = 0;
               last_rate_time = gettimeofday_as_double();
@@ -1000,7 +1009,7 @@ int main(int argc, char **argv) {
 
   pagesize = sysconf(_SC_PAGESIZE);
 
-  while((ch = getopt(argc, argv, "tevqlLdfFh0i:I:p:b:m:P:r:w")) != -1) {
+  while((ch = getopt(argc, argv, "tevqlLdfFh0i:I:p:b:M:m:P:R:r:w")) != -1) {
     switch(ch) {
       case '?': usage(); break;
       case 't': o_touch = 1; break;
@@ -1018,11 +1027,28 @@ int main(int argc, char **argv) {
       case 'p': parse_range(optarg); break;
       case 'i': parse_ignore_item(optarg); break;
       case 'I': parse_filename_filter_item(optarg); break;
-      case 'r': o_kiBps = atoi(optarg); break;
+      case 'r': 
+      {
+        int64_t val = parse_size(optarg);
+        o_Bps = (int)val;
+        break;
+      }
+      case 'R': 
+      {
+        int64_t val = parse_size(optarg);
+        o_pagesPerRateChunk = (int)val;
+        break;
+      }
       case 'm': {
         int64_t val = parse_size(optarg);
         o_max_file_size = (size_t) val;
         if (val != (int64_t) o_max_file_size) fatal("value for -m too big to fit in a size_t");
+        break;
+      }
+      case 'M': {
+        int64_t val = parse_size(optarg);
+        o_min_file_size = (size_t) val;
+        if (val != (int64_t) o_min_file_size) fatal("value for -M too big to fit in a size_t");
         break;
       }
       case 'w': o_wait = 1; break;
