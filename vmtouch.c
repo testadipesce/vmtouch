@@ -166,7 +166,7 @@ void send_exit_signal(char code) {
 
 void usage() {
   printf("\n");
-  printf("vmtouch v%s - the Virtual Memory Toucher by Doug Hoyte\n", VMTOUCH_VERSION);
+  printf("vmtouch v%s (+syg additions) - the Virtual Memory Toucher by Doug Hoyte\n", VMTOUCH_VERSION);
   printf("Portable file system cache diagnostics and control\n\n");
   printf("Usage: vmtouch [OPTIONS] ... FILES OR DIRECTORIES ...\n\nOptions:\n");
   printf("  -t touch pages into memory\n");
