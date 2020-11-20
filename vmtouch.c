@@ -109,6 +109,8 @@ long pagesize;
 
 int64_t total_pages=0;
 int64_t total_pages_in_core=0;
+int64_t total_pages_touched=0;
+int64_t total_pages_evicted=0;
 int64_t total_files=0;
 int64_t total_dirs=0;
 
@@ -168,7 +170,7 @@ void send_exit_signal(char code) {
 
 void usage() {
   printf("\n");
-  printf("vmtouch v%s (+syg additions) - the Virtual Memory Toucher by Doug Hoyte\n", VMTOUCH_VERSION);
+  printf("vmtouch v%s (+syg additions: %s)\n\n - the Virtual Memory Toucher by Doug Hoyte\n", VMTOUCH_VERSION, BUILDINFO );
   printf("Portable file system cache diagnostics and control\n\n");
   printf("Usage: vmtouch [OPTIONS] ... FILES OR DIRECTORIES ...\n\nOptions:\n");
   printf("  -t touch pages into memory\n");
@@ -635,6 +637,7 @@ void vmtouch_file(char *path) {
             range_pages_in_core++;
           }
         }
+        total_pages_in_core += range_pages_in_core;
       if ( range_pages_in_core*pagesize >= o_residencyDigestThreshold )
       {
          printf( "INCORE:%s:%lu:%lu:%s:%.3g%%\n", path, range_pages_in_core*pagesize, bytes2pages(len_of_file)*pagesize, pretty_print_size(len_of_file), 100.0*range_pages_in_core/bytes2pages(len_of_file) );
@@ -704,6 +707,7 @@ void vmtouch_file(char *path) {
         {
           junk_counter += ((char*)mem)[i*pagesize];
           mincore_array[i] = 1;
+          total_pages_touched++;
           if ( o_Bps )
           {
             pages_touched++;
@@ -1174,9 +1178,18 @@ int main(int argc, char **argv) {
     printf("           Files: %" PRId64 "\n", total_files);
     printf("     Directories: %" PRId64 "\n", total_dirs);
     if (o_touch)
-      printf("   Touched Pages: %" PRId64 " (%s)\n", total_pages, pretty_print_size(total_pages*pagesize));
+    {
+      printf("   Touched Pages: %" PRId64 " (%s)\n", total_pages_touched, pretty_print_size(total_pages_touched*pagesize));
+      printf("   Total Pages  : %" PRId64 " (%s)\n", total_pages, pretty_print_size(total_pages*pagesize));
+    }
     else if (o_evict)
-      printf("   Evicted Pages: %" PRId64 " (%s)\n", total_pages, pretty_print_size(total_pages*pagesize));
+    {
+      if ( o_residencyDigestThreshold != -1 )
+      {
+        printf("   Evicted Pages: %" PRId64 " (%s)\n", total_pages_in_core, pretty_print_size(total_pages*pagesize));
+      }
+      printf("   Total Pages  : %" PRId64 " (%s)\n", total_pages, pretty_print_size(total_pages*pagesize));
+    }
     else {
       printf("  Resident Pages: %" PRId64 "/%" PRId64 "  ", total_pages_in_core, total_pages);
       printf("%s/", pretty_print_size(total_pages_in_core*pagesize));
