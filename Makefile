@@ -2,7 +2,7 @@ PREFIX?=	/usr/local
 BINDIR?=	$(PREFIX)/bin
 MANDIR?=	$(PREFIX)/share/man/man8
 
-BUILDINFO='`ec_git_describe|tr "\n" " "`'
+BUILDINFO='`id -un`@`hostname -s`:`pwd -P`,`date`,`git remote get-url origin`,`git describe --long --dirty`'
 
 CC?=		cc
 CFLAGS+=	-Wall -O2 -g -std=c99

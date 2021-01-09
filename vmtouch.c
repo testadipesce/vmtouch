@@ -36,6 +36,9 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ***********************************************************************/
 
+#ifndef BUILDINFO
+#define BUILDINFO "syg_buildinfo__to_be_overridden_by_makefile"
+#endif
 
 #define VMTOUCH_VERSION "1.3.1"
 #define RESIDENCY_CHART_WIDTH 60
@@ -167,6 +170,7 @@ void send_exit_signal(char code) {
       fprintf(stderr, "vmtouch: FATAL: write: %s", strerror(errno));
   }
 }
+
 
 void usage() {
   printf("\n");
@@ -1035,10 +1039,6 @@ static void register_signals_for_pidfile() {
     warning("unable to register signals for pidfile (%s), skipping", strerror(errno));
   }
 }
-
-
-
-
 
 
 int main(int argc, char **argv) {
