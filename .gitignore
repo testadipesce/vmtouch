@@ -1,3 +1,5 @@
 vmtouch
 vmtouch.8
 *.swp
+tags
+tags.lock
